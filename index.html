@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f0f4f8">
+  <script src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
+  <script>
+    // Инициализация для VK Mini Apps — если страница открыта вне ВК, просто игнорируется
+    if (window.vkBridge) { vkBridge.send('VKWebAppInit'); }
+  </script>
+  <style>
+    * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      background: #f0f4f8;
+      margin: 0;
+      padding: 16px;
+      padding-bottom: env(safe-area-inset-bottom);
+      color: #333;
+    }
+    h1 {
+      margin: 0 0 10px;
+      text-align: center;
+      font-size: clamp(18px, 5vw, 24px);
+    }
+    #wheel-wrap {
+      position: relative;
+      width: min(92vw, 480px);
+      aspect-ratio: 1 / 1;
+      margin: 8px auto 16px;
+    }
+    #wheel-svg {
+      width: 100%;
+      height: 100%;
+      display: block;
+      will-change: transform;
+      transition: transform 4s cubic-bezier(0.17, 0.67, 0.08, 0.99);
+    }
+    #pointer {
+      position: absolute;
+      top: calc(-3% - 2px);
+      left: 50%;
+      transform: translateX(-50%);
+      width: 0; height: 0;
+      border-left: clamp(11px, 4.5vw, 24px) solid transparent;
+      border-right: clamp(11px, 4.5vw, 24px) solid transparent;
+      border-top: clamp(22px, 9.5vw, 50px) solid #d32f2f;
+      z-index: 10;
+      filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
+    }
+    #spin-btn {
+      display: block;
+      margin: 0 auto;
+      padding: 16px 40px;
+      font-size: clamp(16px, 4.5vw, 19px);
+      font-weight: bold;
+      background: #d32f2f;
+      color: white;
+      border: none;
+      border-radius: 14px;
+      cursor: pointer;
+      min-height: 48px;               /* удобная зона нажатия на телефоне */
+      touch-action: manipulation;
+      transition: background 0.2s, transform 0.1s;
+    }
+    #spin-btn:hover { background: #b71c1c; }
+    #spin-btn:active { transform: scale(0.96); }
+    #spin-btn:disabled { background: #999; cursor: not-allowed; }
+    #result {
+      margin-top: 20px;
+      font-size: clamp(17px, 5vw, 22px);
+      font-weight: bold;
+      min-height: 3em;
+      text-align: center;
+      max-width: 92vw;
+      line-height: 1.35;
+    }
+    @media (max-width: 360px) {
+      #result { font-size: 16px; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Колесо предсказаний</h1>
+  <div id="wheel-wrap">
+    <div id="pointer"></div>
+    <svg id="wheel-svg" viewBox="0 0 500 500"></svg>
+  </div>
+  <button id="spin-btn">Крутить колесо</button>
+  <div id="result"></div>
+
+  <script>
+    const predictions = [
+      "День будет полон неожиданных встреч.",
+      "Вас ждёт приятный финансовый сюрприз.",
+      "Сегодня лучше не спешить с решениями.",
+      "Появится шанс начать что-то важное.",
+      "Будьте внимательны к деталям — они многое подскажут.",
+      "Ждите хороших новостей от близких.",
+      "Смело беритесь за новое дело — удача на вашей стороне.",
+      "Не бойтесь просить о помощи — вам помогут.",
+      "Сегодня стоит прислушаться к интуиции.",
+      "Впереди спокойный и продуктивный день."
+    ];
+
+    const svg = document.getElementById('wheel-svg');
+    const resultDiv = document.getElementById('result');
+    const spinBtn = document.getElementById('spin-btn');
+    const cx = 250, cy = 250, r = 250;
+    let isSpinning = false;
+    let currentRotation = 0;
+
+    function polar(cx, cy, r, angleDeg) {
+      const a = (angleDeg - 90) * Math.PI / 180;
+      return { x: cx + r * Math.cos(a), y: cy + r * Math.sin(a) };
+    }
+
+    function describeArc(cx, cy, r, startAngle, endAngle) {
+      const start = polar(cx, cy, r, endAngle);
+      const end = polar(cx, cy, r, startAngle);
+      const largeArc = endAngle - startAngle <= 180 ? 0 : 1;
+      return `M ${cx} ${cy} L ${start.x} ${start.y} A ${r} ${r} 0 ${largeArc} 0 ${end.x} ${end.y} Z`;
+    }
+
+    function wrapText(text, maxChars) {
+      const words = text.split(' ');
+      const lines = [];
+      let current = '';
+      for (const w of words) {
+        if ((current + ' ' + w).trim().length <= maxChars) {
+          current = (current + ' ' + w).trim();
+        } else {
+          if (current) lines.push(current);
+          current = w;
+        }
+      }
+      if (current) lines.push(current);
+      return lines;
+    }
+
+    function createWheel() {
+      const n = predictions.length;
+      const angle = 360 / n;
+
+      for (let i = 0; i < n; i++) {
+        const startAngle = i * angle;
+        const endAngle = (i + 1) * angle;
+        const midAngle = startAngle + angle / 2;
+
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+        path.setAttribute('d', describeArc(cx, cy, r, startAngle, endAngle));
+        const hue = (i * angle + 30) % 360;
+        path.setAttribute('fill', `hsl(${hue}, 70%, 55%)`);
+        path.setAttribute('stroke', '#fff');
+        path.setAttribute('stroke-width', '2.5');
+        svg.appendChild(path);
+
+        const textRadius = r * 0.55;
+        const tp = polar(cx, cy, textRadius, midAngle);
+
+        let rotation = midAngle - 90;
+        if (midAngle > 90 && midAngle < 270) {
+          rotation += 180;
+        }
+
+        const textElem = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+        textElem.setAttribute('x', tp.x);
+        textElem.setAttribute('y', tp.y);
+        textElem.setAttribute('fill', '#fff');
+        textElem.setAttribute('font-size', '13');
+        textElem.setAttribute('font-weight', 'bold');
+        textElem.setAttribute('text-anchor', 'middle');
+        textElem.setAttribute('dominant-baseline', 'middle');
+        textElem.setAttribute('transform', `rotate(${rotation}, ${tp.x}, ${tp.y})`);
+
+        const lines = wrapText(predictions[i], 24);
+        const lineHeight = 14;
+        const startDY = -((lines.length - 1) * lineHeight) / 2;
+        lines.forEach((line, idx) => {
+          const tspan = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+          tspan.setAttribute('x', tp.x);
+          tspan.setAttribute('dy', idx === 0 ? startDY : lineHeight);
+          tspan.textContent = line;
+          textElem.appendChild(tspan);
+        });
+
+        svg.appendChild(textElem);
+      }
+
+      const center = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+      center.setAttribute('cx', cx);
+      center.setAttribute('cy', cy);
+      center.setAttribute('r', 16);
+      center.setAttribute('fill', '#333');
+      svg.appendChild(center);
+    }
+
+    function spinWheel() {
+      if (isSpinning) return;
+      isSpinning = true;
+      spinBtn.disabled = true;
+      resultDiv.textContent = '';
+
+      const n = predictions.length;
+      const angle = 360 / n;
+
+      const targetSector = Math.floor(Math.random() * n);
+      const midAngle = targetSector * angle + angle / 2;
+      const wobble = (Math.random() - 0.5) * (angle * 0.6);
+      const targetRotation = (360 - midAngle + wobble + 360) % 360;
+
+      const fullSpins = 8 + Math.floor(Math.random() * 4);
+      const currentNorm = currentRotation % 360;
+      let delta = targetRotation - currentNorm;
+      if (delta < 0) delta += 360;
+      currentRotation += fullSpins * 360 + delta;
+
+      svg.style.transform = `rotate(${currentRotation}deg)`;
+
+      setTimeout(() => {
+        const finalAngle = currentRotation % 360;
+        let sectorIndex = Math.floor((360 - finalAngle) / angle) % n;
+        if (sectorIndex < 0) sectorIndex += n;
+        resultDiv.textContent = predictions[sectorIndex];
+        isSpinning = false;
+        spinBtn.disabled = false;
+      }, 4000);
+    }
+
+    spinBtn.addEventListener('click', spinWheel);
+    createWheel();
+  </script>
+</body>
+</html>
